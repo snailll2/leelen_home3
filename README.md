@@ -3,7 +3,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1.0-blue.svg)](https://www.home-assistant.io/)
 
-Home Assistant integration for Leelen (立林) smart home devices.
+Home Assistant integration for Leelen (立林) smart home devices.  
 
 ## Features
 
@@ -21,14 +21,14 @@ Home Assistant integration for Leelen (立林) smart home devices.
 1. Open HACS in your Home Assistant
 2. Go to "Integrations" → Click "+" button
 3. Search for "Leelen Home" or add as custom repository:
-   - Repository: `https://github.com/snailll2/leelen_home`
+   - Repository: `https://github.com/snailll2/leelen_home3`
    - Category: Integration
 4. Click "Download"
 5. Restart Home Assistant
 
 ### Manual Installation
 
-1. Copy the `custom_components/leelen_home` folder to your Home Assistant `config/custom_components` directory
+1. Copy the `custom_components/leelen_home3` folder to your Home Assistant `config/custom_components` directory
 2. Restart Home Assistant
 
 ## Configuration
@@ -41,17 +41,11 @@ Home Assistant integration for Leelen (立林) smart home devices.
 
 ## Supported Devices
 
-| Device Type | Model |
-|------------|-------|
-| Central AC | TYPE_CENTER_AIR_CONDITIONER |
-| Curtain | TYPE_WIRELESS_CURTAIN |
-| Light | TYPE_WIRELESS_LIGHT |
-| Temperature Sensor | TYPE_TEMPERATURE_SENSOR |
-| Humidity Sensor | TYPE_HUMIDITY_SENSOR |
-| PM Sensor | TYPE_PM_SENSOR |
-| Door Sensor | TYPE_WIRELESS_DOOR_SENSOR |
-| Water Sensor | TYPE_WIRELESS_WATER_IMMERSION_SENSOR |
-| Socket | ZIGBEE_SMART_WALL_SOCKET |
+| Device Type | Model | Type Code |
+|------------|-------|-----------|
+| climate | DEVICE_TYPE_CLIMATE  | 8221 |
+| climate | DEVICE_TYPE_HEATTER | 8218 |
+| fan | DEVICE_TYPE_FRESHER | 8217 |
 
 ## Troubleshooting
 
@@ -67,7 +61,7 @@ Home Assistant integration for Leelen (立林) smart home devices.
 
 ## Support
 
-If you encounter any issues, please [open an issue](https://github.com/snail0903/leelen-home/issues) on GitHub.
+If you encounter any issues, please [open an issue](https://github.com/snailll2/leelen_home3/issues) on GitHub.
 
 ## License
 

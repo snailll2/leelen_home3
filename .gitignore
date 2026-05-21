@@ -38,3 +38,5 @@ Thumbs.db
 
 # Project specific
 OPTIMIZATION_SUMMARY.md
+
+.claude/
