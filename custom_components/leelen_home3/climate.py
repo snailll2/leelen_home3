@@ -58,7 +58,7 @@ class LeelenClimate(ClimateEntity):
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_min_temp = 5
     _attr_max_temp = 35
-    _attr_hvac_modes = [HVACMode(k) for k in HVAC_MODE_MAP.values()]
+    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL, HVACMode.FAN_ONLY, HVACMode.DRY, HVACMode.AUTO]
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE  | ClimateEntityFeature.TURN_OFF | ClimateEntityFeature.TURN_ON
     def __init__(self, hass, entry, device, logic_srv, siid, direct_did):
         self._hass = hass
@@ -73,7 +73,8 @@ class LeelenClimate(ClimateEntity):
         self._current_temperature = None
         self._target_temperature = 26
         self._hvac_mode = HVACMode.OFF
-        self._fan_mode = "medium"
+        
+        self._fan_mode = FAN_MEDIUM
         self._on_off = False
 
         self._attr_unique_id = f"leelen_climate_{self._did}_{self._siid}"
