@@ -2,10 +2,11 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
 from .const import (
     CONF_ACCESS_TOKEN,
+    CONF_ACCOUNT_ID,
     CONF_DEVICE_ADDR,
     CONF_GROUP_ID,
     CONF_MQTT_CLIENT_ID,
@@ -18,7 +19,7 @@ from .const import (
 from .coordinator import LeelenCoordinator
 from .leelen.api.HttpApi import HttpApi
 from .leelen.utils.LogUtils import LogUtils
-from .mqtt_client import LeelenMqttClient
+from .mqtt_client import LeelenMqttClient, build_mqtt_username
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api._refresh_token = entry.data.get(CONF_REFRESH_TOKEN, "")
     api._token_expires_in = entry.data.get("expiresIn", 0)
     api._token_created_at = entry.data.get("tokenCreatedAt", 0)
+    api._client_id = entry.data.get("mqttClientId", "")
     api._group_id = entry.data.get(CONF_GROUP_ID, "")
 
     LogUtils.d(__name__, f"API实例: {api}")
@@ -67,6 +69,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     mqtt_client_id = entry.options.get(CONF_MQTT_CLIENT_ID, "").strip()
     mqtt_username = entry.options.get(CONF_MQTT_USERNAME, "").strip()
+    manual_mqtt = bool(mqtt_client_id and mqtt_username)
+    if not manual_mqtt:
+        mqtt_client_id, mqtt_username = await _resolve_auto_mqtt_credentials(
+            api, entry
+        )
+
     if mqtt_client_id and mqtt_username:
         mqtt_client = await hass.async_add_executor_job(
             LeelenMqttClient,
@@ -75,14 +83,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             api,
             mqtt_client_id,
             mqtt_username,
+            not manual_mqtt,
         )
         hass.data[DOMAIN][entry.entry_id]["mqtt_client"] = mqtt_client
         await hass.async_add_executor_job(mqtt_client.start)
     else:
-        _LOGGER.info("未配置 Leelen MQTT 注册身份，使用 REST 状态同步")
+        _LOGGER.info("MQTT 凭据不可用，使用 REST 状态同步")
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
+
+
+async def _resolve_auto_mqtt_credentials(api: HttpApi, entry: ConfigEntry):
+    """Derive MQTT credentials the same way the official app does.
+
+    官方 App（TokenLoader）连接 MQTT 时：username 为 "a5e4x84a:" +
+    accountId，密码为 accessToken，clientId 取自 refreshToken 接口响应。
+    """
+    account_id = str(entry.data.get(CONF_ACCOUNT_ID) or "").strip()
+    client_id = str(getattr(api, "_client_id", "") or "").strip()
+
+    if account_id and not client_id:
+        # 首次启动还没有 clientId：强制刷新一次 token，响应里会下发
+        try:
+            await api._do_refresh_token()
+        except ConfigEntryAuthFailed:
+            raise
+        except Exception as exc:
+            LogUtils.d(__name__, f"自动获取 MQTT clientId 失败: {exc}")
+        client_id = str(getattr(api, "_client_id", "") or "").strip()
+
+    if account_id and client_id:
+        _LOGGER.info("已按官方 App 方式自动获取 MQTT 凭据")
+        return client_id, build_mqtt_username(account_id)
+
+    _LOGGER.info(
+        "缺少 accountId 或 clientId，无法自动获取 MQTT 凭据，使用 REST 同步"
+    )
+    return "", ""
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

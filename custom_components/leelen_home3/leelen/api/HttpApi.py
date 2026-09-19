@@ -38,6 +38,7 @@ class HttpApi:
         self._device_list = []
         self._access_token = ""
         self._refresh_token = ""
+        self._client_id = ""
         self._group_id = ""
         self._entry_id = None
         self._token_expires_in = 0  # token 有效期（秒），由 refresh 接口返回
@@ -94,6 +95,11 @@ class HttpApi:
                         self._access_token = new_token
                         if new_refresh:
                             self._refresh_token = new_refresh
+                        # 官方 App 同款：refreshToken 响应会下发最新的 MQTT
+                        # clientId（TokenLoader 用它连接 iot.leelen.com:8883）
+                        new_client_id = p.get("clientId")
+                        if new_client_id:
+                            self._client_id = str(new_client_id)
                         # 保存 token 有效期，用于提前刷新判断
                         expires_in = p.get("expiresIn")
                         if expires_in:
@@ -131,6 +137,7 @@ class HttpApi:
                 "refreshToken": self._refresh_token,
                 "expiresIn": self._token_expires_in,
                 "tokenCreatedAt": self._token_created_at,
+                "mqttClientId": self._client_id,
             }
         )
         LogUtils.d("HttpApi", "token 已持久化保存到 config entry")
@@ -425,6 +432,11 @@ class HttpApi:
         if refresh_token:
             self._refresh_token = refresh_token
             LogUtils.d("HttpApi", "从 verifyCodeLogin 获取到 refreshToken")
+        # 登录响应若直接下发 MQTT clientId 则一并记录（缺失时由
+        # refreshToken 接口补充，官方 App 同款流程）
+        login_client_id = code_login_result.get("params", {}).get("clientId")
+        if login_client_id:
+            self._client_id = str(login_client_id)
         # 保存 token 有效期
         expires_in = code_login_result.get("params", {}).get("expiresIn")
         if expires_in:
@@ -478,6 +490,7 @@ class HttpApi:
             "accountId": accountId,
             "accessToken": accessToken,
             "refreshToken": self._refresh_token,
+            "mqttClientId": self._client_id,
             "groupId": self._group_id,
             "groupName": group_name
         }

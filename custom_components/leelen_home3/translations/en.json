@@ -42,7 +42,7 @@
       },
       "mqtt": {
         "title": "MQTT Live State",
-        "description": "Enter the MQTT Client ID and username already registered by the Leelen app to enable live state pushes. The current login token is used as the password. Leave both fields empty to disable MQTT and use REST fallback sync.",
+        "description": "MQTT credentials are resolved automatically, the same way the official app does (client ID from the token-refresh response, username derived from your account, password = current access token). Fill in both fields to override manually; leave both empty for automatic mode.",
         "data": {
           "mqtt_client_id": "MQTT Client ID",
           "mqtt_username": "MQTT Username"

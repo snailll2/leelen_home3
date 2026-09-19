@@ -16,6 +16,16 @@ MQTT_KEEPALIVE = 180
 MQTT_RECONNECT_MIN_SECONDS = 15
 MQTT_RECONNECT_MAX_SECONDS = 300
 
+# 官方 App 的 MQTT 用户名前缀（反编译 TokenLoader：
+# "a5e4x84a:" + accountId，密码为 accessToken，clientId 由
+# refreshToken 接口下发）。
+MQTT_USERNAME_PREFIX = "a5e4x84a:"
+
+
+def build_mqtt_username(account_id):
+    """Return the official app's MQTT username for one account."""
+    return f"{MQTT_USERNAME_PREFIX}{account_id}"
+
 
 class LeelenMqttClient:
     """Receive original-format Leelen MQTT state pushes."""
@@ -27,6 +37,7 @@ class LeelenMqttClient:
         api,
         client_id,
         username,
+        auto=False,
     ):
         import paho.mqtt.client as mqtt
 
@@ -35,6 +46,8 @@ class LeelenMqttClient:
         self._api = api
         self._client_id = client_id
         self._username = username
+        # auto 模式下 clientId 来自 refreshToken 响应，可能在重连前已轮换
+        self._auto = bool(auto)
         self._stopped = False
 
         self._client = mqtt.Client(
@@ -122,6 +135,18 @@ class LeelenMqttClient:
             # The REST client may have refreshed the access token since the
             # previous connection. Paho will use this value on its next retry.
             self._set_credentials()
+            if self._auto:
+                latest_client_id = (
+                    getattr(self._api, "_client_id", "") or self._client_id
+                )
+                if latest_client_id != self._client_id:
+                    self._client_id = latest_client_id
+                    # Paho keeps the connect payload's client id on the
+                    # client object; keep it in sync before the retry.
+                    try:
+                        self._client._client_id = latest_client_id
+                    except AttributeError:
+                        pass
             _LOGGER.warning(
                 "Leelen MQTT 已断开（%s），将按退避间隔重连",
                 reason_code,

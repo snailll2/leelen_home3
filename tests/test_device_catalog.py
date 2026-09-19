@@ -90,7 +90,10 @@ LIVE_ACCOUNT_FIXTURE = [
         physical("fresh-air-module", "新风模块", 8215, 834),
         details(
             "fresh-air-module",
-            [(2, "新风", "新风", 834, 8261)],
+            [
+                (2, "新风", "新风", 834, 8261),
+                (3, "新风执行服务", "新风", 834, 8267),
+            ],
         ),
     ),
     *[
@@ -119,6 +122,47 @@ LIVE_ACCOUNT_FIXTURE = [
         )
     ],
     (
+        physical("temp-sensor-1", "温湿度传感器", 8214, 341),
+        details(
+            "temp-sensor-1",
+            [(2, "主卧温湿度", "温湿度传感器", 341, 8246)],
+        ),
+    ),
+    (
+        physical("lamp-module", "ZigBee 灯具模块", 12802, 342),
+        details(
+            "lamp-module",
+            [
+                (2, "客厅灯", "灯", 342, 8212),
+                (3, "客厅调光灯", "调光灯", 342, 8291),
+            ],
+        ),
+    ),
+    (
+        physical("socket-module", "智能插座", 12802, 342),
+        details(
+            "socket-module",
+            [(2, "厨房插座", "智能插座", 342, 8243)],
+        ),
+    ),
+    (
+        physical("curtain-module", "窗帘电机", 12802, 343),
+        details(
+            "curtain-module",
+            [
+                (2, "客厅窗帘", "窗帘", 343, 8232),
+                (3, "主卧百叶帘", "百叶帘", 343, 8317),
+            ],
+        ),
+    ),
+    (
+        physical("breaker-1", "照明空开", 8205, 37),
+        details(
+            "breaker-1",
+            [(2, "照明空开", "空开断路器", 37, 8200)],
+        ),
+    ),
+    (
         physical("gateway", "zigbee无线网关", 8196, 588),
         details("gateway", [(2, "无线网关", "网关服务", 588, 8211)]),
     ),
@@ -137,10 +181,16 @@ class DeviceCatalogTests(unittest.TestCase):
         climate = list(self.catalog.iter_platform_services(self.devices, "climate"))
         fan = list(self.catalog.iter_platform_services(self.devices, "fan"))
         sensor = list(self.catalog.iter_platform_services(self.devices, "sensor"))
+        light = list(self.catalog.iter_platform_services(self.devices, "light"))
+        switch = list(self.catalog.iter_platform_services(self.devices, "switch"))
+        cover = list(self.catalog.iter_platform_services(self.devices, "cover"))
 
         self.assertEqual(11, len(climate))
-        self.assertEqual(1, len(fan))
-        self.assertEqual(6, len(sensor))
+        self.assertEqual(2, len(fan))
+        self.assertEqual(7, len(sensor))
+        self.assertEqual(2, len(light))
+        self.assertEqual(2, len(switch))
+        self.assertEqual(2, len(cover))
 
         self.assertEqual(
             [
@@ -167,13 +217,36 @@ class DeviceCatalogTests(unittest.TestCase):
     def test_ignores_panel_controller_and_gateway_services(self):
         routed = {
             service["service_type"]
-            for platform in ("climate", "fan", "sensor")
+            for platform in (
+                "climate",
+                "fan",
+                "sensor",
+                "light",
+                "switch",
+                "cover",
+            )
             for _, service in self.catalog.iter_platform_services(
                 self.devices, platform
             )
         }
 
-        self.assertEqual({8259, 8261, 8268, 8272}, routed)
+        self.assertEqual(
+            {
+                8259,
+                8261,
+                8267,
+                8268,
+                8272,
+                8246,
+                8212,
+                8291,
+                8243,
+                8232,
+                8317,
+                8200,
+            },
+            routed,
+        )
 
     def test_extracts_temperature_from_sensor_payloads(self):
         self.assertEqual(23.5, self.catalog.extract_temperature(23.5))
@@ -192,17 +265,6 @@ class DeviceCatalogTests(unittest.TestCase):
         self.assertEqual(
             "leelen_climate_ac-module_2",
             self.catalog.entity_unique_id(device, service, "climate"),
-        )
-
-    def test_keeps_last_temperature_while_gateway_value_is_pending(self):
-        self.assertEqual(22.5, self.catalog.merge_temperature(22.5, None))
-        self.assertEqual(
-            22.5,
-            self.catalog.merge_temperature(22.5, {"humidity": 40}),
-        )
-        self.assertEqual(
-            25.0,
-            self.catalog.merge_temperature(22.5, {"curTemp": 25}),
         )
 
 

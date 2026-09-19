@@ -55,7 +55,7 @@
       },
       "mqtt": {
         "title": "MQTT 实时状态",
-        "description": "填写立林 App 已注册的 MQTT Client ID 和用户名以启用实时推送。密码自动使用当前登录 Token。留空两项可停用 MQTT 并使用 REST 兜底同步。",
+        "description": "MQTT 凭据默认按官方 App 同款方式自动获取（clientId 取自令牌刷新接口响应，用户名由账号生成，密码自动使用当前登录 Token）。两项都填写可手动覆盖；全部留空即保持自动模式。",
         "data": {
           "mqtt_client_id": "MQTT Client ID",
           "mqtt_username": "MQTT 用户名"
@@ -65,7 +65,6 @@
         "title": "同步设备",
         "description": "从立林云同步设备到 Home Assistant"
       },
-
       "refresh_result": {
         "title": "同步完成",
         "description": "共发现设备 {total} 台\n新增设备：{added} 台\n移除设备：{removed} 台\n移除实体：{removed_entities} 个"

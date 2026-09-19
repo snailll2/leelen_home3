@@ -156,6 +156,7 @@ class LeelenIntegrationConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             **entry.data,
                             "accessToken": result.get("accessToken"),
                             "refreshToken": result.get("refreshToken"),
+                            "mqttClientId": result.get("mqttClientId", ""),
                             "username": result.get("username"),
                             "password": result.get("password"),
                             "deviceAddr": result.get("deviceAddr"),

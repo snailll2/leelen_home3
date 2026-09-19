@@ -34,8 +34,6 @@ SPEED_PERCENTAGE = {
     2: 100,
 }
 
-REVERSE_SPEED = {v: k for k, v in SPEED_PERCENTAGE.items()}
-
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
     devices = hass.data[DOMAIN].get('devices', {}).get(entry.entry_id, [])
@@ -159,29 +157,17 @@ class LeelenFan(FanEntity):
 
     async def _send_control(self):
         try:
-            
             value = {"onOff": 1 if self._is_on else 0}
 
             if self._percentage > 0:
-                speed = 1
-                if self._percentage >= 66:
-                    speed = 3
-                elif self._percentage >= 33:
-                    speed = 2
-                value["windSpeed"] = speed
+                # Fresh-air devices report/accept the speed in the "gear"
+                # field (app: InFormatKey.GEAR); the gear scale is 0/1/2.
+                chosen = 0
+                for gear, pct in SPEED_PERCENTAGE.items():
+                    if pct <= self._percentage:
+                        chosen = gear
+                value["gear"] = chosen
                 self._is_on = True
-            else:
-                self._is_on = False
-
-            
-            
-
-            # for mode_name, mode_value in PRESET_MODES.items():
-            #     if mode_value == self._preset_mode:
-            #         value["windSpeed"] = mode_name
-            #         break
-
-                    
 
             await HttpApi.get_instance(self._hass).encrypt_v1_ctrl_fiids(
                 siid=self._siid,
@@ -214,9 +200,14 @@ class LeelenFan(FanEntity):
                         value = fiids_data[0].get("value", {})
                         if isinstance(value, dict):
                             self._is_on = value.get("onOff", 0) == 1
-                            wind_speed = value.get("windSpeed")
-                            self._percentage = REVERSE_SPEED.get(wind_speed, 33)
-                            self._preset_mode = PRESET_MODES.get(wind_speed, FAN_MEDIUM)
+                            try:
+                                gear = int(value.get("gear", 0))
+                            except (TypeError, ValueError):
+                                gear = 0
+                            self._percentage = SPEED_PERCENTAGE.get(gear, 33)
+                            self._preset_mode = PRESET_MODES.get(
+                                gear, FAN_MEDIUM
+                            )
         except Exception as e:
             _LOGGER.error(f"更新风扇状态失败: {e}")
 

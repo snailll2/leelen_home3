@@ -1,6 +1,6 @@
 DOMAIN = "leelen3"
 NAME = "Leelen Home3"
-VERSION = "0.3.2"
+VERSION = "0.4.0"
 
 CONF_PHONE = "phone"
 CONF_DEVICE_ADDR = "deviceAddr"
@@ -23,6 +23,7 @@ SUPPORTED_PLATFORMS = [
     "switch",
     "light",
     "fan",
+    "cover",
 ]
 
 ATTR_ON_OFF = "onOff"
@@ -40,7 +41,7 @@ FAN_SPEED_LOW = 1
 FAN_SPEED_MEDIUM = 2
 FAN_SPEED_HIGH = 3
 
-PROFILE_AIR_CONDITIONER = 8259
-PROFILE_SWITCH = 8260
-PROFILE_FAN = 8261
-PROFILE_LIGHT = 8262
+# Logical service types live in device_catalog.py, named after the official
+# app's IotDeviceServiceType constants (decompiled from com.leelen.community).
+# The old PROFILE_* placeholders here were wrong: 8260 is the 485 floor-heating
+# server (not a switch) and 8262 is a bed service (not a light).

@@ -1,46 +1,67 @@
 import logging
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 
 from .const import DOMAIN
-from .leelen.api.HttpApi import HttpApi
+from .coordinator import FIID_BREAKER_SWITCH, FIID_SWITCH
+from .device_catalog import (
+    SERVICE_TYPE_BREAKER_1PNL_3PNL,
+    SERVICE_TYPE_BREAKER_1PN_3PN,
+    SERVICE_TYPE_BREAKER_1P_3P,
+    entity_unique_id,
+    iter_platform_services,
+)
 
 _LOGGER = logging.getLogger(__name__)
-FIID_READ = 49415
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
-    devices = hass.data[DOMAIN].get('devices', {}).get(entry.entry_id, [])
+BREAKER_SERVICE_TYPES = {
+    SERVICE_TYPE_BREAKER_1PNL_3PNL,
+    SERVICE_TYPE_BREAKER_1PN_3PN,
+    SERVICE_TYPE_BREAKER_1P_3P,
+}
+
+# Breaker switch values are base64 uint16 byte streams (app:
+# BreakerControlModel): "//8=" (0xFFFF) is on, "AAA=" (0x0000) is off.
+BREAKER_ON = "//8="
+BREAKER_OFF = "AAA="
+
+
+async def async_setup_entry(hass, entry, async_add_entities):
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     entities = []
 
-    for device in devices:
-        direct_did = device.get("direct_did")
-        device_type = device.get("device_type")
-
-        if device_type == 9999999:
-            for logic_srv in device.get("logic_srv", []):
-                siid = logic_srv.get("siid")
-                entities.append(LeelenSwitch(hass, entry, device, logic_srv, siid, direct_did))
-
+    for device, logic_srv in iter_platform_services(
+        coordinator.get_devices(),
+        "switch",
+    ):
+        entity_class = (
+            LeelenBreakerSwitch
+            if logic_srv.get("service_type") in BREAKER_SERVICE_TYPES
+            else LeelenSwitch
+        )
+        entities.append(entity_class(device, logic_srv, coordinator))
     async_add_entities(entities)
 
 
 class LeelenSwitch(SwitchEntity):
-    def __init__(self, hass, entry, device, logic_srv, siid, direct_did):
-        self._hass = hass
-        self._entry = entry
+    _attr_should_poll = False
+
+    fiid = FIID_SWITCH
+
+    def __init__(self, device, logic_srv, coordinator):
         self._device = device
         self._logic_srv = logic_srv
+        self._coordinator = coordinator
         self._did = device.get("dev_addr")
-        self._direct_did = direct_did
+        self._direct_did = device.get("direct_did")
         self._siid = logic_srv.get("siid")
-        self._device_type = device.get("device_type")
         self._name = logic_srv.get("logic_name", "Switch")
+        self._is_on = None
 
-        self._is_on = False
-        self._attr_unique_id = f"leelen_switch_{self._did}_{self._siid}"
+        self._attr_unique_id = entity_unique_id(device, logic_srv, "switch")
+        self._apply_coordinator_state()
 
     @property
     def name(self):
@@ -49,8 +70,8 @@ class LeelenSwitch(SwitchEntity):
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
-            identifiers={(DOMAIN, self._did)},
-            name=self._device.get("dev_name", "Leelen Device"),
+            identifiers={(DOMAIN, self._logic_srv["service_id"])},
+            name=self._name,
             manufacturer="Leelen",
             model=str(self._device.get("model")),
         )
@@ -59,50 +80,70 @@ class LeelenSwitch(SwitchEntity):
     def is_on(self):
         return self._is_on
 
-    async def async_turn_on(self, **kwargs):
-        self._is_on = True
-        await self._send_control()
+    @property
+    def available(self):
+        return self._is_on is not None
 
-    async def async_turn_off(self, **kwargs):
-        self._is_on = False
-        await self._send_control()
-
-    async def _send_control(self):
-        try:
-            if self._device_type == 9999999:
-                self._fiid = 49415
-            else:
-                self._fiid = 49416
-            value = {"onOff": 1 if self._is_on else 0}
-            await HttpApi.get_instance(self._hass).encrypt_v1_ctrl_fiids(
-                siid=self._siid,
-                direct_did=self._direct_did,
-                fiids=[{"fiid": self._fiid, "value": value}],
-                did=self._did
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            self._coordinator.async_add_listener(
+                self._handle_coordinator_update
             )
+        )
 
-            import asyncio
-            await asyncio.sleep(1.5)
-            await self.async_update()
-        except Exception as e:
-            _LOGGER.error(f"控制开关失败: {e}")
+    def _handle_coordinator_update(self):
+        self._apply_coordinator_state()
+        self.async_write_ha_state()
 
-    async def async_update(self):
+    def _apply_coordinator_state(self):
+        value = self._coordinator.get_fiid_value(
+            self._did,
+            self._siid,
+            self.fiid,
+        )
+        self._is_on = self._parse_value(value)
+
+    def _parse_value(self, value):
+        if isinstance(value, dict) and "onOff" in value:
+            return value["onOff"] == 1
+        return None
+
+    async def _send_control(self, value):
         try:
-            result = await HttpApi.get_instance(self._hass).read_dids_fiids(
+            confirmed = await self._coordinator.async_control_fiid(
                 did=self._did,
                 direct_did=self._direct_did,
-                fiids=[FIID_READ],
-                siid=self._siid
+                siid=self._siid,
+                fiid=self.fiid,
+                value=value,
             )
+            if not confirmed:
+                _LOGGER.debug(
+                    "设备尚未确认开关控制: did=%s siid=%s",
+                    self._did,
+                    self._siid,
+                )
+        except Exception as exc:
+            _LOGGER.error("控制开关设备失败: %s", exc)
 
-            if result.get("result") == 1:
-                params = result.get("params", [])
-                if params:
-                    fiids_data = params[0].get("fiids", [])
-                    if fiids_data:
-                        value = fiids_data[0].get("value", {})
-                        if isinstance(value, dict):
-                            self._is_on = value.get("onOff", 0) == 1
-        except Exception as e:
-            _LOGGER.error(f"更新开关状态失败: {e}")
+    async def async_turn_on(self, **kwargs):
+        await self._send_control({"onOff": 1})
+
+    async def async_turn_off(self, **kwargs):
+        await self._send_control({"onOff": 0})
+
+
+class LeelenBreakerSwitch(LeelenSwitch):
+    fiid = FIID_BREAKER_SWITCH
+
+    def _parse_value(self, value):
+        if isinstance(value, dict) and "data" in value:
+            return value["data"] == BREAKER_ON
+        return None
+
+    async def async_turn_on(self, **kwargs):
+        await self._send_control({"data": BREAKER_ON})
+
+    async def async_turn_off(self, **kwargs):
+        await self._send_control({"data": BREAKER_OFF})
