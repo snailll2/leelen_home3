@@ -25,6 +25,9 @@ class HttpApi:
     _instance = None
     _lock = threading.Lock()
 
+    # 官方 App（TokenLoader）刷新后 20 秒内不会再次发起刷新
+    _REFRESH_COOLDOWN_SECONDS = 20.0
+
     def __init__(self, hass: HomeAssistant):
         self.BASE_URL = "https://iot.leelen.com"
         self.RD_BASE_URL = "https://rd.iot.leelen.com"
@@ -43,6 +46,10 @@ class HttpApi:
         self._entry_id = None
         self._token_expires_in = 0  # token 有效期（秒），由 refresh 接口返回
         self._token_created_at = 0  # token 创建时间戳（毫秒）
+        # 单飞 + 冷却：并发/连环触发时只发一次刷新请求，避免把还没落盘的
+        # 旧 refreshToken 重复上送而被云端轮换作废（对齐官方 App 行为）
+        self._refresh_lock = asyncio.Lock()
+        self._refresh_result_cache = None
 
     def get_secret(self, num: int) -> str:
         chars = string.ascii_letters + string.digits
@@ -60,66 +67,87 @@ class HttpApi:
         return hashlib.md5(''.join(random.choices(string.ascii_letters + string.digits, k=32)).encode()).hexdigest()
 
     async def _do_refresh_token(self):
-        """用 refreshToken 刷新 accessToken"""
+        """用 refreshToken 刷新 accessToken（单飞 + 20 秒冷却）。
+
+        官方 App（TokenLoader.getNetTokenLocked）用 AtomicBoolean 保证并发
+        请求共享同一次刷新、且 20 秒内不重复刷新。refreshToken 每次刷新都会
+        被云端轮换，重复上送同一个旧值会直接 10002，因此这里同样必须去重。
+        """
         if not self._refresh_token:
             LogUtils.e("无 refreshToken，无法刷新")
             return False
 
-        try:
-            url = f"{self.BASE_URL}/rest/app/community/security/refreshToken"
-            session = async_get_clientsession(self._hass)
-            params = {
-                "accessToken": self._access_token,
-                "refreshToken": self._refresh_token
-            }
-            async with session.post(
-                url,
-                verify_ssl=False,
-                json={
-                    "params": params,
-                    "seq": 65,
-                    "version": "V1.0"
-                },
-            ) as res:
-                res.raise_for_status()
-                data = await res.json(encoding="utf-8")
-                LogUtils.d(
-                    "HttpApi",
-                    f"refreshToken 请求完成: result={data.get('result')}",
-                )
-                if data.get("result") == 1:
-                    p = data.get("params", {})
-                    new_token = p.get("accessToken")
-                    new_refresh = p.get("refreshToken")
-                    if new_token:
-                        self._access_token = new_token
-                        if new_refresh:
-                            self._refresh_token = new_refresh
-                        # 官方 App 同款：refreshToken 响应会下发最新的 MQTT
-                        # clientId（TokenLoader 用它连接 iot.leelen.com:8883）
-                        new_client_id = p.get("clientId")
-                        if new_client_id:
-                            self._client_id = str(new_client_id)
-                        # 保存 token 有效期，用于提前刷新判断
-                        expires_in = p.get("expiresIn")
-                        if expires_in:
-                            self._token_expires_in = int(expires_in)
-                            self._token_created_at = int(time.time() * 1000)
-                            LogUtils.d("HttpApi", f"token 有效期 expiresIn={expires_in}s（约 {expires_in//3600} 小时）")
-                        # 持久化保存新 token，防止重启后使用旧 token
-                        await self._persist_tokens()
-                        LogUtils.d("HttpApi", f"token刷新成功(refreshToken方式), expiresIn={expires_in}s")
-                        return True
-                elif data.get("result") == 10002:
-                    LogUtils.e("refreshToken 已过期，触发重新认证")
-                    raise ConfigEntryAuthFailed(
-                        "refreshToken 已过期，请重新验证码登录"
-                    )
-        except ConfigEntryAuthFailed:
-            raise
-        except Exception as e:
-            LogUtils.e(f"refreshToken方式失败: {e}")
+        cached = self._refresh_result_cache
+        if cached is not None and time.monotonic() < cached[0]:
+            return cached[1]
 
+        async with self._refresh_lock:
+            cached = self._refresh_result_cache
+            if cached is not None and time.monotonic() < cached[0]:
+                return cached[1]
+            try:
+                result = await self._refresh_token_request()
+            except ConfigEntryAuthFailed:
+                # refreshToken 已失效：不缓存，让后续调用同样触发重新认证
+                raise
+            except Exception as exc:
+                LogUtils.e(f"refreshToken方式失败: {exc}")
+                result = False
+            deadline = time.monotonic() + self._REFRESH_COOLDOWN_SECONDS
+            self._refresh_result_cache = (deadline, result)
+            return result
+
+    async def _refresh_token_request(self):
+        """发起一次 refreshToken 刷新请求（无去重，仅供 _do_refresh_token）。"""
+        url = f"{self.BASE_URL}/rest/app/community/security/refreshToken"
+        session = async_get_clientsession(self._hass)
+        params = {
+            "accessToken": self._access_token,
+            "refreshToken": self._refresh_token
+        }
+        async with session.post(
+            url,
+            verify_ssl=False,
+            json={
+                "params": params,
+                "seq": 65,
+                "version": "V1.0"
+            },
+        ) as res:
+            res.raise_for_status()
+            data = await res.json(encoding="utf-8")
+            LogUtils.d(
+                "HttpApi",
+                f"refreshToken 请求完成: result={data.get('result')}",
+            )
+            if data.get("result") == 1:
+                p = data.get("params", {})
+                new_token = p.get("accessToken")
+                new_refresh = p.get("refreshToken")
+                if new_token:
+                    self._access_token = new_token
+                    if new_refresh:
+                        self._refresh_token = new_refresh
+                    # 官方 App 同款：refreshToken 响应会下发最新的 MQTT
+                    # clientId（TokenLoader 用它连接 iot.leelen.com:8883）
+                    new_client_id = p.get("clientId")
+                    if new_client_id:
+                        self._client_id = str(new_client_id)
+                    # 保存 token 有效期，用于提前刷新判断
+                    expires_in = p.get("expiresIn")
+                    if expires_in:
+                        self._token_expires_in = int(expires_in)
+                        self._token_created_at = int(time.time() * 1000)
+                        LogUtils.d("HttpApi", f"token 有效期 expiresIn={expires_in}s（约 {expires_in//3600} 小时）")
+                    # 持久化保存新 token，防止重启后使用旧 token
+                    await self._persist_tokens()
+                    LogUtils.d("HttpApi", f"token刷新成功(refreshToken方式), expiresIn={expires_in}s")
+                    return True
+            elif data.get("result") == 10002:
+                LogUtils.e("refreshToken 已过期，触发重新认证")
+                raise ConfigEntryAuthFailed(
+                    "refreshToken 已过期，请重新验证码登录"
+                )
         return False
 
     async def _persist_tokens(self):
@@ -138,30 +166,21 @@ class HttpApi:
                 "expiresIn": self._token_expires_in,
                 "tokenCreatedAt": self._token_created_at,
                 "mqttClientId": self._client_id,
+                "appTerminalId": self.appTerminalId,
             }
         )
         LogUtils.d("HttpApi", "token 已持久化保存到 config entry")
 
-    def _is_token_expires_soon(self, within_seconds=600):
-        """检查 token 是否即将过期（默认 10 分钟内）。"""
-        if not self._token_expires_in or not self._token_created_at:
-            return False
-        elapsed = int(time.time() * 1000) - self._token_created_at
-        remaining = self._token_expires_in * 1000 - elapsed
-        if remaining <= 0:
-            LogUtils.d("HttpApi", "token 已过期，需要刷新")
-            return True
-        if remaining < within_seconds * 1000:
-            LogUtils.d("HttpApi", f"token 即将过期（剩余 {remaining//1000}s），提前刷新")
-            return True
-        return False
+    def ensure_terminal_id(self, stored: str | None) -> str:
+        """复用持久化的设备标识（官方 App 的 terminalId 不随进程变化）。"""
+        stored = (stored or "").strip()
+        if stored:
+            self.appTerminalId = stored
+        return self.appTerminalId
 
     async def _make_request(self, url, params, seq, version="V1.0"):
-        # token 即将过期时主动刷新，避免请求返回 10001 再重试
-        if self._is_token_expires_soon():
-            LogUtils.d("HttpApi", "token 即将过期，主动刷新")
-            await self._do_refresh_token()
-
+        # 惰性刷新（官方 App 同款）：平时直接带当前 token 请求，服务端返回
+        # 10001 时才刷新并重试，避免高频主动刷新轮换掉 refreshToken
         session = async_get_clientsession(self._hass)
         headers = {}
         if self._access_token:

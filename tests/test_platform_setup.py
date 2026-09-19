@@ -123,6 +123,15 @@ def install_home_assistant_stubs():
     config_entries.ConfigEntry = object
     core = add_module("homeassistant.core")
     core.HomeAssistant = object
+    exceptions = add_module("homeassistant.exceptions")
+    exceptions.ConfigEntryAuthFailed = type(
+        "ConfigEntryAuthFailed", (Exception,), {}
+    )
+    exceptions.ConfigEntryNotReady = type(
+        "ConfigEntryNotReady", (Exception,), {}
+    )
+    aiohttp_client = add_module("homeassistant.helpers.aiohttp_client")
+    aiohttp_client.async_get_clientsession = lambda hass=None: None
     const = add_module("homeassistant.const")
 
     class UnitOfTemperature:

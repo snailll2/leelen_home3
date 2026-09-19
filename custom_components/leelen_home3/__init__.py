@@ -49,6 +49,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api._token_created_at = entry.data.get("tokenCreatedAt", 0)
     api._client_id = entry.data.get("mqttClientId", "")
     api._group_id = entry.data.get(CONF_GROUP_ID, "")
+    # 设备标识跨重启保持不变（官方 App 用持久化的设备唯一标识）
+    api.ensure_terminal_id(entry.data.get("appTerminalId"))
 
     LogUtils.d(__name__, f"API实例: {api}")
     LogUtils.d(__name__, f"api._group_id: {api._group_id if hasattr(api, '_group_id') else 'N/A'}")
