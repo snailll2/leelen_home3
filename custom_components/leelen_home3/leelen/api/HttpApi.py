@@ -178,9 +178,28 @@ class HttpApi:
             self.appTerminalId = stored
         return self.appTerminalId
 
+    def _is_token_expires_soon(self, within_seconds=600):
+        """检查 token 是否即将过期（默认 10 分钟内）。"""
+        if not self._token_expires_in or not self._token_created_at:
+            return False
+        elapsed = int(time.time() * 1000) - self._token_created_at
+        remaining = self._token_expires_in * 1000 - elapsed
+        if remaining <= 0:
+            LogUtils.d("HttpApi", "token 已过期，需要刷新")
+            return True
+        if remaining < within_seconds * 1000:
+            LogUtils.d("HttpApi", f"token 即将过期（剩余 {remaining//1000}s），提前刷新")
+            return True
+        return False
+
     async def _make_request(self, url, params, seq, version="V1.0"):
-        # 惰性刷新（官方 App 同款）：平时直接带当前 token 请求，服务端返回
-        # 10001 时才刷新并重试，避免高频主动刷新轮换掉 refreshToken
+        # token 即将过期时提前刷新，避免请求被 10001 拒绝；即使判断失准，
+        # 下方 10001 兜底刷新 + 重试仍能救回。刷新经 _do_refresh_token
+        # 单飞去重，不会产生并发轮换。
+        if self._is_token_expires_soon():
+            LogUtils.d("HttpApi", "token 即将过期，主动刷新")
+            await self._do_refresh_token()
+
         session = async_get_clientsession(self._hass)
         headers = {}
         if self._access_token:

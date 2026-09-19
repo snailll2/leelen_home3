@@ -82,12 +82,13 @@ every 5 minutes as a background refresh while MQTT is connected.
 
 - Login uses your Leelen phone number plus an SMS verification code
   (no account password required).
-- Tokens are refreshed exactly the way the official app does: **lazily** —
-  only when the cloud rejects a request with an expired-token code, followed
-  by an automatic retry of that request. Concurrent refreshes are
-  deduplicated with a 20-second cooldown so the rotating refresh token is
-  never replayed (the classic cause of spurious logouts). New tokens are
-  persisted in the config entry, so restarts do not require re-login.
+- Tokens are refreshed proactively shortly before expiry (10-minute window),
+  with a lazy fallback: if the cloud rejects a request with an expired-token
+  code, the token is refreshed and the request retried automatically.
+  Concurrent refreshes are deduplicated with a 20-second cooldown so the
+  rotating refresh token is never replayed (the classic cause of spurious
+  logouts). New tokens are persisted in the config entry, so restarts do not
+  require re-login.
 - The device identity (terminal ID) is persisted across restarts like the
   official app instead of being regenerated every start.
 - If the `refreshToken` itself expires, the integration raises a re-auth flow:
