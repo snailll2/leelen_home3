@@ -39,6 +39,10 @@ def _ha_entity_stub():
         def supported_color_modes(self):
             return self._attr_supported_color_modes
 
+        @property
+        def color_mode(self):
+            return self._attr_color_mode
+
     return StubEntity
 
 
@@ -313,10 +317,12 @@ class PlatformSetupTests(unittest.TestCase):
         )
 
         self.assertEqual({color_mode.ONOFF}, simple_light.supported_color_modes)
+        self.assertEqual(color_mode.ONOFF, simple_light.color_mode)
         self.assertEqual(
             {color_mode.ONOFF, color_mode.BRIGHTNESS, color_mode.COLOR_TEMP},
             dimmable_light.supported_color_modes,
         )
+        self.assertEqual(color_mode.COLOR_TEMP, dimmable_light.color_mode)
 
         coordinator.states[("lamp-module", 3, 49408)] = {"onOff": 1}
         coordinator.states[("lamp-module", 3, 49228)] = {"level": 50}

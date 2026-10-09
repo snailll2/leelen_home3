@@ -77,6 +77,16 @@ class LeelenLight(LightEntity):
             if self._dimmable:
                 color_modes.add(ColorMode.BRIGHTNESS)
         self._attr_supported_color_modes = color_modes
+        # HA requires every light whose supported modes are not just ONOFF
+        # to report the active color mode, or state writes raise.
+        if self._rgb:
+            self._attr_color_mode = ColorMode.RGB
+        elif self._color_temp:
+            self._attr_color_mode = ColorMode.COLOR_TEMP
+        elif self._dimmable:
+            self._attr_color_mode = ColorMode.BRIGHTNESS
+        else:
+            self._attr_color_mode = ColorMode.ONOFF
         if self._color_temp:
             self._attr_min_color_temp_kelvin = MIN_COLOR_TEMP_KELVIN
             self._attr_max_color_temp_kelvin = MAX_COLOR_TEMP_KELVIN

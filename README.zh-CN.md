@@ -2,7 +2,7 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1.0-blue.svg)](https://www.home-assistant.io/)
-[![Version](https://img.shields.io/badge/version-0.4.0-green.svg)]()
+[![Version](https://img.shields.io/badge/version-0.4.1-green.svg)]()
 
 [English](README.md) | **简体中文**
 
