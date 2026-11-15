@@ -12,6 +12,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import (
+    CONF_GATEWAY_IP,
     CONF_MQTT_CLIENT_ID,
     CONF_MQTT_USERNAME,
     CONF_PHONE,
@@ -20,6 +21,7 @@ from .const import (
 )
 from .device_catalog import PLATFORM_SERVICE_TYPES, entity_unique_id, iter_platform_services
 from .leelen.api.HttpApi import HttpApi
+from .leelen.lan.client import DEFAULT_PORT
 from .leelen.utils.LogUtils import LogUtils
 
 _LOGGER = logging.getLogger(__name__)
@@ -198,7 +200,39 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["refresh", "mqtt"],
+            menu_options=["refresh", "mqtt", "lan"],
+        )
+
+    async def async_step_lan(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> FlowResult:
+        """Let the user pin a gateway IP when mDNS discovery does not find it."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            gateway_ip = str(user_input.get(CONF_GATEWAY_IP) or "").strip()
+            options = dict(self._config_entry.options)
+            if gateway_ip:
+                options[CONF_GATEWAY_IP] = gateway_ip
+            else:
+                options.pop(CONF_GATEWAY_IP, None)
+            return self.async_create_entry(title="", data=options)
+
+        return self.async_show_form(
+            step_id="lan",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_GATEWAY_IP,
+                        default=self._config_entry.options.get(
+                            CONF_GATEWAY_IP,
+                            "",
+                        ),
+                    ): str,
+                }
+            ),
+            description_placeholders={"port": str(DEFAULT_PORT)},
+            errors=errors,
         )
 
     async def async_step_mqtt(
