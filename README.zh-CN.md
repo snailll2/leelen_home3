@@ -2,7 +2,7 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1.0-blue.svg)](https://www.home-assistant.io/)
-[![Version](https://img.shields.io/badge/version-0.5.0-green.svg)]()
+[![Version](https://img.shields.io/badge/version-0.5.1-green.svg)]()
 
 [English](README.md) | **简体中文**
 
@@ -82,9 +82,11 @@
    成，集成会订阅官方 App 同款的 `lliot/fiids_report/{did}/{siid}` 主题，设备上报近实时到达。
 4. **控制确认** — `encryptV1CtrlFIIDS` 只是"排队"下发指令（响应中的
    `waitNum`/`waitTime` 表示网关尚未执行）。因此发送指令后，集成会等待设备
-   上报与指令一致的状态（按云端 `waitTime` 提示，上限 10 秒），并在指令等待
-   期间（最长 60 秒）拒收过期的旧状态上报——避免界面回退到"指令前"的状态，
-   也就是常被反馈的"状态慢一拍"问题。
+   上报与指令变更字段一致的状态（按云端 `waitTime` 提示，上限 10 秒），并在
+   指令等待期间（最长 60 秒）拒收过期的旧状态上报——避免界面回退到"指令前"
+   的状态，也就是常被反馈的"状态慢一拍"问题。确认只比对本次真正变更且设备
+   曾上报过的字段，面板不回传 `mode`/`windSpeed` 等辅助字段不影响确认；暖通
+   控制也只回写变更字段，不把缓存里的旧状态一并下发。
 
 REST 轮询兜底：当 LAN 和 MQTT 均未就绪时每 30 秒同步一次；任一推送通道就绪
 时每 5 分钟做一次后台刷新。

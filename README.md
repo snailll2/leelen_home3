@@ -88,10 +88,14 @@ The integration keeps device state fresh with three cooperating layers:
    reports arrive in near real time.
 3. **Control confirmation** — `encryptV1CtrlFIIDS` only queues a command at the
    gateway (`waitNum`/`waitTime` in the response). After sending a command the
-   integration therefore waits for a device report that matches the commanded
-   values (up to the cloud's `waitTime` hint, capped at 10 s) and rejects
-   outdated reports for up to 60 s while a command is pending. This prevents
-   the UI from falling back to the pre-command state.
+   integration therefore waits for a device report that matches the changed
+   fields of the command (up to the cloud's `waitTime` hint, capped at 10 s)
+   and rejects outdated reports for up to 60 s while a command is pending.
+   This prevents the UI from falling back to the pre-command state. Matching
+   only covers the fields this command actually changed and the device has
+   reported before — panels that omit `mode`/`windSpeed` in their reports
+   still confirm fine. HVAC commands likewise send only the changed fields
+   instead of replaying cached state.
 
 REST polling acts as the safety net: every 30 s while MQTT is unavailable, and
 every 5 minutes as a background refresh while MQTT is connected.

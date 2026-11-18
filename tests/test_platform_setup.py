@@ -147,9 +147,12 @@ def install_home_assistant_stubs():
     entity = add_module("homeassistant.helpers.entity")
     entity.DeviceInfo = dict
     update_coordinator = add_module("homeassistant.helpers.update_coordinator")
-    update_coordinator.DataUpdateCoordinator = type(
-        "DataUpdateCoordinator", (), {}
-    )
+
+    class FakeDataUpdateCoordinator:
+        def __init__(self, *args, **kwargs):
+            self.update_interval = kwargs.get("update_interval")
+
+    update_coordinator.DataUpdateCoordinator = FakeDataUpdateCoordinator
 
 
 class FakeCoordinator:
@@ -303,6 +306,102 @@ class PlatformSetupTests(unittest.TestCase):
         heater._handle_coordinator_update()
 
         self.assertEqual(hvac_mode.HEAT, heater.hvac_mode)
+
+    def test_heater_control_sends_only_changed_fields(self):
+        """温控只回写 onOff/setTemp，不把缓存里的 mode/windSpeed 写回面板。"""
+        created, coordinator = create_live_platform_entities()
+        climate_platform = load_platforms()["climate"]
+
+        heater = next(
+            entity
+            for entity in created["climate"]
+            if type(entity).__name__ == "LeelenHeater"
+        )
+        coordinator.states[("heating-module", 2, 49415)] = {
+            "onOff": 1,
+            "setTemp": 20,
+            "mode": 0,
+            "windSpeed": 1,
+        }
+        heater._handle_coordinator_update()
+
+        asyncio.run(heater.async_set_temperature(temperature=26))
+        self.assertEqual(49415, coordinator.controls[-1]["fiid"])
+        self.assertEqual(
+            {"onOff": 1, "setTemp": 26},
+            coordinator.controls[-1]["value"],
+        )
+
+        asyncio.run(
+            heater.async_set_hvac_mode(climate_platform.HVACMode.OFF)
+        )
+        self.assertEqual(
+            {"onOff": 0, "mode": 0},
+            coordinator.controls[-1]["value"],
+        )
+
+    def _make_real_coordinator(self):
+        """Instantiate the real LeelenCoordinator under the HA stubs."""
+        coordinator_module = importlib.import_module(
+            "platform_probe.coordinator"
+        )
+        return coordinator_module.LeelenCoordinator(object(), None, None)
+
+    def test_control_confirmation_requires_only_changed_reported_fields(self):
+        """面板不回传 mode/windSpeed 时，指令仍能凭 setTemp 变化确认。"""
+        coordinator = self._make_real_coordinator()
+        key = ("heating-module", 2, 49415)
+        coordinator._data["states"] = {key: {"onOff": 1, "setTemp": 20}}
+
+        coordinator._begin_control(
+            key, {"onOff": 1, "mode": 0, "setTemp": 26, "windSpeed": 1}
+        )
+        states = coordinator._data["states"]
+        state_times = coordinator._data.setdefault("state_times", {})
+        changed = coordinator._accept_state_value(
+            states, state_times, key, {"onOff": 1, "setTemp": 26}, 1000
+        )
+
+        self.assertTrue(changed)
+        self.assertTrue(coordinator._control_expectations[key]["confirmed"])
+
+    def test_control_read_back_mismatch_is_logged_with_values(self):
+        """读回与指令不符时，DEBUG 日志必须包含设备实际回报的原值。"""
+        coordinator = self._make_real_coordinator()
+        key = ("heating-module", 2, 49415)
+        expected = {"onOff": 1, "setTemp": 26}
+        coordinator._begin_control(key, expected)
+
+        response = {
+            "result": 1,
+            "params": [
+                {
+                    "did": key[0],
+                    "siid": key[1],
+                    "fiids": [
+                        {
+                            "fiid": 49415,
+                            "value": {"onOff": 1, "setTemp": 20},
+                            "time": 1000,
+                        }
+                    ],
+                }
+            ],
+        }
+        with self.assertLogs(
+            "platform_probe.coordinator", level="DEBUG"
+        ) as logs:
+            confirmed = coordinator._merge_control_read(response, key, expected)
+
+        self.assertFalse(confirmed)
+        self.assertTrue(
+            any("读回" in message for message in logs.output),
+            logs.output,
+        )
+        self.assertTrue(
+            any("setTemp" in message and "20" in message for message in logs.output),
+            logs.output,
+        )
 
     def test_light_capabilities_follow_service_type(self):
         created, coordinator = create_live_platform_entities()

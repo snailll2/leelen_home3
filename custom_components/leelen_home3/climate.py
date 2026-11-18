@@ -185,9 +185,13 @@ class LeelenClimate(ClimateEntity):
                 "onOff": 1,
             }
         else:
-            value = self._complete_control_value(
-                target_temperature=temperature,
-            )
+            # 只回写变更字段。mode/windSpeed 取自 HA 缓存，长时间状态失联
+            # （如 refreshToken 过期）后属于过期值，全量回写会把面板改到
+            # 错误状态；面板自身的模式保持不变。
+            value = {
+                "onOff": 1,
+                "setTemp": int(temperature),
+            }
         await self._send_control(value)
 
     async def async_set_hvac_mode(self, hvac_mode):
@@ -200,10 +204,10 @@ class LeelenClimate(ClimateEntity):
                     "onOff": 1,
                 }
         else:
-            value = self._complete_control_value(
-                on_off=hvac_mode != HVACMode.OFF,
-                hvac_mode=hvac_mode,
-            )
+            value = {
+                "onOff": 1 if hvac_mode != HVACMode.OFF else 0,
+                "mode": REVERSE_HVAC_MODE_MAP.get(hvac_mode, 0),
+            }
         await self._send_control(value)
 
     async def async_set_fan_mode(self, fan_mode):
@@ -216,38 +220,6 @@ class LeelenClimate(ClimateEntity):
                 "onOff": 1,
             }
         )
-
-    def _complete_control_value(
-        self,
-        *,
-        on_off=None,
-        hvac_mode=None,
-        target_temperature=None,
-    ):
-        """Keep the existing floor-heating request shape unchanged."""
-        if on_off is None:
-            on_off = self._on_off
-        if hvac_mode is None:
-            hvac_mode = self._hvac_mode
-        if target_temperature is None:
-            target_temperature = self._target_temperature
-
-        value = {
-            "onOff": 1 if on_off else 0,
-            "mode": REVERSE_HVAC_MODE_MAP.get(hvac_mode, 0),
-            "setTemp": int(target_temperature),
-        }
-        wind_speed = next(
-            (
-                speed
-                for speed, name in FAN_MODES.items()
-                if name == self._fan_mode
-            ),
-            None,
-        )
-        if wind_speed is not None:
-            value["windSpeed"] = wind_speed
-        return value
 
     async def _send_control(self, value):
         try:

@@ -424,6 +424,13 @@ class LeelenCoordinator(DataUpdateCoordinator):
     def _merge_control_read(self, response, key, expected):
         if response.get("result") != 1:
             return False
+        did, siid, fiid = key
+        raw_value = None
+        for item in response.get("params") or []:
+            if item.get("did") == did and item.get("siid") == siid:
+                for fiid_data in item.get("fiids") or []:
+                    if fiid_data.get("fiid") == fiid:
+                        raw_value = fiid_data.get("value")
         states = self._data.setdefault("states", {})
         state_times = self._data.setdefault("state_times", {})
         changed = self._merge_state_response(
@@ -431,7 +438,17 @@ class LeelenCoordinator(DataUpdateCoordinator):
             states,
             state_times,
         )
-        confirmed = self._value_matches(states.get(key), expected)
+        expectation = self._control_expectations.get(key)
+        required = expectation["required"] if expectation else expected
+        confirmed = self._value_matches(states.get(key), required)
+        if not confirmed:
+            # raw_value 是设备实时读回的原值（即使被旧状态过滤拒收也记录），
+            # 用于区分“设备未执行指令”与“回报字段不匹配”。
+            _LOGGER.debug(
+                "[ctrl-confirm] 设备读回与指令不符 "
+                "did=%s siid=%s fiid=%s 指令=%s 需匹配=%s 读回=%s 状态=%s",
+                did, siid, fiid, expected, required, raw_value, states.get(key),
+            )
         if changed:
             self.async_set_updated_data(self._data)
         return confirmed
@@ -457,8 +474,21 @@ class LeelenCoordinator(DataUpdateCoordinator):
         return changed
 
     def _begin_control(self, key, expected):
+        previous = self._data.get("states", {}).get(key)
+        if isinstance(previous, dict):
+            # 只要求“真正变更且设备曾上报过的字段”在后续状态中生效：
+            # 面板可能不回传 mode/windSpeed 等辅助字段（或回传自己的值），
+            # 全字段强匹配会导致指令永远无法确认。
+            required = {
+                field: value
+                for field, value in expected.items()
+                if field in previous and previous[field] != value
+            } or dict(expected)
+        else:
+            required = dict(expected)
         self._control_expectations[key] = {
             "expected": dict(expected),
+            "required": required,
             "confirmed": False,
             "deadline": monotonic() + CONTROL_PENDING_SECONDS,
             "event": asyncio.Event(),
@@ -497,7 +527,7 @@ class LeelenCoordinator(DataUpdateCoordinator):
         expectation = self._control_expectations.get(key)
         now = monotonic()
         if expectation is not None:
-            if self._value_matches(value, expectation["expected"]):
+            if self._value_matches(value, expectation["required"]):
                 if not expectation["confirmed"]:
                     expectation["confirmed"] = True
                     expectation["deadline"] = (
@@ -505,6 +535,11 @@ class LeelenCoordinator(DataUpdateCoordinator):
                     )
                     expectation["event"].set()
             elif now < expectation["deadline"]:
+                _LOGGER.debug(
+                    "[ctrl-confirm] 丢弃指令等待期内的旧状态 "
+                    "did=%s siid=%s fiid=%s 收到=%s 需匹配=%s",
+                    key[0], key[1], key[2], value, expectation["required"],
+                )
                 return False
             else:
                 self._control_expectations.pop(key, None)
