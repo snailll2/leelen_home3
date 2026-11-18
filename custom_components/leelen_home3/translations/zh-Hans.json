@@ -50,7 +50,15 @@
         "menu_options": {
           "refresh": "同步设备",
           "mqtt": "MQTT 实时状态",
+          "lan": "局域网控制",
           "cancel": "取消"
+        }
+      },
+      "lan": {
+        "title": "局域网控制",
+        "description": "留空使用自动 mDNS 发现（_iot-gateway._tcp.local.）；当 HA 与网关不在同一广播域或 mDNS 被过滤时，填写网关 IP 强制锁定。网关端口固定为 {port}。",
+        "data": {
+          "gateway_ip": "网关 IP（留空使用自动发现）"
         }
       },
       "mqtt": {

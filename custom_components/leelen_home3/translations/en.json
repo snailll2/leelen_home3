@@ -37,7 +37,15 @@
         "menu_options": {
           "refresh": "Sync Devices",
           "mqtt": "MQTT Live State",
+          "lan": "Local Network",
           "cancel": "Cancel"
+        }
+      },
+      "lan": {
+        "title": "Local Network",
+        "description": "Leave the gateway IP empty to use automatic mDNS discovery (_iot-gateway._tcp.local.). Fill it in only when HA and the gateway are on different VLANs or mDNS is filtered. The gateway port is fixed at {port}.",
+        "data": {
+          "gateway_ip": "Gateway IP (leave empty for auto-discovery)"
         }
       },
       "mqtt": {

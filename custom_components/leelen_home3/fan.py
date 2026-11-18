@@ -37,23 +37,24 @@ SPEED_PERCENTAGE = {
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
     devices = hass.data[DOMAIN].get('devices', {}).get(entry.entry_id, [])
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     entities = []
 
     for device, logic_srv in iter_platform_services(devices, "fan"):
         direct_did = device.get("direct_did")
         siid = logic_srv.get("siid")
-        entities.append(LeelenAirFresher(hass, entry, device, logic_srv, siid, direct_did))
+        entities.append(LeelenAirFresher(hass, entry, device, logic_srv, siid, direct_did, coordinator))
 
     async_add_entities(entities)
 
 
-class LeelenFan(FanEntity): 
+class LeelenFan(FanEntity):
     _attr_supported_features = FanEntityFeature.SET_SPEED   | FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
     _attr_preset_modes = list(PRESET_MODES.values())
     _attr_speed_count = 3
     _attr_fiids = [FIID_FRESHER, FIID_PM_25]
 
-    def __init__(self, hass, entry, device, logic_srv, siid, direct_did):
+    def __init__(self, hass, entry, device, logic_srv, siid, direct_did, coordinator):
         self._hass = hass
         self._entry = entry
         self._device = device
@@ -62,6 +63,7 @@ class LeelenFan(FanEntity):
         self._direct_did = direct_did
         self._siid = siid
         self._name = logic_srv.get("logic_name", "Fan")
+        self._coordinator = coordinator
 
         self._is_on = False
         self._percentage = 0
@@ -169,12 +171,18 @@ class LeelenFan(FanEntity):
                 value["gear"] = chosen
                 self._is_on = True
 
-            await HttpApi.get_instance(self._hass).encrypt_v1_ctrl_fiids(
-                siid=self._siid,
+            confirmed = await self._coordinator.async_control_fiid(
+                did=self._did,
                 direct_did=self._direct_did,
-                fiids=[{"fiid": FIID_FRESHER, "value": value}],
-                did=self._did
+                siid=self._siid,
+                fiid=FIID_FRESHER,
+                value=value,
             )
+            if not confirmed:
+                _LOGGER.debug(
+                    "设备尚未确认风扇控制: did=%s siid=%s",
+                    self._did, self._siid,
+                )
             _LOGGER.debug(f"控制风扇: {value}")
 
             import asyncio

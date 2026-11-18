@@ -7,11 +7,29 @@
 **English** | [简体中文](README.zh-CN.md)
 
 Home Assistant integration for Leelen (立林) 3.0 smart home devices, driven by
-the same cloud service (`iot.leelen.com`) used by the official Leelen app.
+the same cloud service (`iot.leelen.com`) used by the official Leelen app,
+with an optional local-network shortcut that bypasses the cloud for both
+control and state pushes.
 
-Integration domain: `leelen3` · iot_class: `cloud_push`
+Integration domain: `leelen3` · iot_class: `local_push`
 
 ## Features
+
+### Local-network control (iotlan LEEL JSON over TLS)
+
+When HA can reach the Leelen gateway on the LAN (mDNS `_iot-gateway._tcp.local.`
+or a manually configured IP), the integration talks the same `iotlan`
+protocol the official app uses on the local network:
+
+- `bind` → `random` → HMAC-MD5 derived AES key → `login` → recurring `heartbeat`
+- Control commands take the LAN shortcut (`dmgr.ctrlFIIDS` wrapped in
+  `transparent` / `DevPayload` / `Payload`), bypassing `iot.leelen.com`
+- Device state pushes (`dmgr.notifyFIIDS`) arrive over the same TLS socket
+  in real time, so the UI updates faster than the cloud MQTT path
+
+The cloud REST + MQTT path remains as a fallback: if the LAN handshake fails
+or the gateway is offline, controls transparently fall back to
+`encryptV1CtrlFIIDS`, and the REST snapshot keeps state fresh.
 
 ### Climate — central air conditioner (service type 8259)
 
@@ -125,7 +143,7 @@ every 5 minutes as a background refresh while MQTT is connected.
 
 ### Options
 
-Open the integration options for two menus:
+Open the integration options for three menus:
 
 - **MQTT** — credentials are resolved **automatically**, the same way the
   official Leelen app does: the username is derived from your account
@@ -133,6 +151,11 @@ Open the integration options for two menus:
   client ID is delivered by the cloud's token-refresh response. No manual
   input is required. Fill in both fields only to override the automatic
   values manually; leave both empty to keep automatic mode.
+- **LAN** — controls the local-network shortcut. Leave the gateway IP empty
+  to use automatic mDNS discovery (`_iot-gateway._tcp.local.`); fill it in
+  only when discovery does not find the gateway (typical when HA and the
+  gateway are on different VLANs or mDNS is filtered). The integration
+  always listens on the gateway's advertised port (default `49853`).
 - **Refresh devices** — re-reads the device topology from the cloud, adds
   entities for new devices, removes entities for devices deleted in the Leelen
   app, reports the counts, and reloads the integration. Use this after adding

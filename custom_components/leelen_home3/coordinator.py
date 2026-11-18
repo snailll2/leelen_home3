@@ -115,6 +115,8 @@ class LeelenCoordinator(DataUpdateCoordinator):
         self._data = {}
         self._control_expectations = {}
         self._mqtt_connected = False
+        self._lan_manager = None
+        self._lan_connected = False
 
     async def _async_update_data(self):
         _LOGGER.debug("=== 开始 REST 状态同步 ===")
@@ -166,9 +168,7 @@ class LeelenCoordinator(DataUpdateCoordinator):
         if self._mqtt_connected == connected:
             return
         self._mqtt_connected = connected
-        self.update_interval = (
-            REST_PUSH_INTERVAL if connected else REST_FALLBACK_INTERVAL
-        )
+        self._refresh_update_interval()
         self._data["mqtt_connected"] = connected
         if self.data is not None:
             self.async_set_updated_data(self._data)
@@ -176,6 +176,33 @@ class LeelenCoordinator(DataUpdateCoordinator):
             "Leelen MQTT %s，REST 同步间隔调整为 %s 秒",
             "已连接" if connected else "已断开",
             int(self.update_interval.total_seconds()),
+        )
+
+    def set_lan_manager(self, lan_manager):
+        """Inject the LAN manager so control commands can take the LAN shortcut."""
+        self._lan_manager = lan_manager
+
+    def async_set_lan_connected(self, connected):
+        """Mirror LAN readiness into REST polling cadence + push dispatch."""
+        connected = bool(connected)
+        if self._lan_connected == connected:
+            return
+        self._lan_connected = connected
+        self._refresh_update_interval()
+        self._data["lan_connected"] = connected
+        if self.data is not None:
+            self.async_set_updated_data(self._data)
+        _LOGGER.info(
+            "Leelen LAN %s，REST 同步间隔调整为 %s 秒",
+            "已就绪" if connected else "已断开",
+            int(self.update_interval.total_seconds()),
+        )
+
+    def _refresh_update_interval(self):
+        """REST polling cadence: 5 min if any push channel is up, else 30 s."""
+        any_push = self._mqtt_connected or self._lan_connected
+        self.update_interval = (
+            REST_PUSH_INTERVAL if any_push else REST_FALLBACK_INTERVAL
         )
 
     def get_devices(self):
@@ -201,10 +228,20 @@ class LeelenCoordinator(DataUpdateCoordinator):
         fiid,
         value,
     ):
-        """Send one original-format control and merge device confirmation."""
+        """Send one original-format control and merge device confirmation.
+
+        Local LAN transport is tried first when available; if it fails (or the
+        LAN manager is not ready) we transparently fall back to the cloud
+        ``encryptV1CtrlFIIDS`` path so the user-facing experience never
+        degrades when the gateway is offline or mDNS discovery missed it.
+        """
         key = (did, siid, fiid)
         self._begin_control(key, value)
         try:
+            if await self._try_lan_control(did, direct_did, siid, fiid, value, key):
+                return True
+
+            _LOGGER.info("[ctrl] 走云端 encryptV1CtrlFIIDS (did=%s fiid=%s)", did, fiid)
             result = await self._api.encrypt_v1_ctrl_fiids(
                 did=did,
                 direct_did=direct_did,
@@ -233,6 +270,92 @@ class LeelenCoordinator(DataUpdateCoordinator):
         except Exception:
             self._control_expectations.pop(key, None)
             raise
+
+    async def _try_lan_control(self, did, direct_did, siid, fiid, value, key):
+        """Attempt the LAN shortcut; on success mark the control confirmed.
+
+        Returns ``True`` when the LAN channel accepted and acked the command,
+        ``False`` when the LAN channel is unavailable or rejected it (caller
+        should fall back to the cloud path).  We do not block waiting for the
+        ``dmgr.notifyFIIDS`` push — it flows in asynchronously through
+        :meth:`async_apply_lan_payload` and naturally clears the expectation.
+        The gateway ack is treated as authoritative for the optimistic UI.
+        """
+        if self._lan_manager is None:
+            _LOGGER.debug("[ctrl] LAN 跳过：manager 未注入 (did=%s)", did)
+            return False
+        if not self._lan_manager.is_ready:
+            _LOGGER.debug("[ctrl] LAN 跳过：未就绪 (did=%s)", did)
+            return False
+        acked = await self._lan_manager.ctrl_fiids(
+            did=did,
+            direct_did=direct_did,
+            siid=siid,
+            fiid=fiid,
+            value=value,
+        )
+        if not acked:
+            _LOGGER.info("[ctrl] LAN 失败 → 回退云端 (did=%s fiid=%s)", did, fiid)
+            return False
+        _LOGGER.info("[ctrl] LAN 成功 (did=%s fiid=%s value=%s)", did, fiid, value)
+        expectation = self._control_expectations.get(key)
+        if expectation is not None and not expectation["confirmed"]:
+            expectation["confirmed"] = True
+            expectation["deadline"] = monotonic() + CONTROL_CONFIRMED_GRACE_SECONDS
+            expectation["event"].set()
+            states = self._data.setdefault("states", {})
+            states[key] = value
+            self.async_set_updated_data(self._data)
+        return True
+
+    def async_apply_lan_payload(self, payload):
+        """Merge one transparent-wrapped dmgr.notifyFIIDS LAN push into state."""
+        if not isinstance(payload, dict):
+            return
+        method = payload.get("method")
+        if method != "dmgr.notifyFIIDS":
+            _LOGGER.debug(
+                "[lan-push] 跳过非 notifyFIIDS 推送 method=%s", method
+            )
+            return
+        params = payload.get("params")
+        if not isinstance(params, dict):
+            return
+
+        did = params.get("did")
+        siid = params.get("siid")
+        if did is None or siid is None:
+            _LOGGER.debug("[lan-push] 推送缺 did/siid: %s", params)
+            return
+
+        states = self._data.setdefault("states", {})
+        state_times = self._data.setdefault("state_times", {})
+        received_at = int(time() * 1000)
+        changed = False
+        accepted_fiids = []
+        for fiid_data in params.get("fiids") or []:
+            fiid = fiid_data.get("fiid")
+            if fiid not in SUPPORTED_FIIDS:
+                _LOGGER.debug(
+                    "[lan-push] 跳过未支持的 fiid=%s (did=%s siid=%s)",
+                    fiid, did, siid,
+                )
+                continue
+            changed = self._accept_state_value(
+                states,
+                state_times,
+                (did, siid, fiid),
+                fiid_data.get("value"),
+                fiid_data.get("time", received_at),
+            ) or changed
+            accepted_fiids.append(fiid)
+        _LOGGER.debug(
+            "[lan-push] did=%s siid=%s accepted_fiids=%s changed=%s",
+            did, siid, accepted_fiids, changed,
+        )
+
+        if changed:
+            self.async_set_updated_data(self._data)
 
     def async_apply_mqtt_payload(self, payload):
         """Merge one original-format dmgr.notifyFIIDS push into HA state."""

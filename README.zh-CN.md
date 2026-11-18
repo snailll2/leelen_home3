@@ -2,16 +2,32 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1.0-blue.svg)](https://www.home-assistant.io/)
-[![Version](https://img.shields.io/badge/version-0.4.1-green.svg)]()
+[![Version](https://img.shields.io/badge/version-0.5.0-green.svg)]()
 
 [English](README.md) | **简体中文**
 
-用于 Home Assistant 的立林（Leelen）3.0 智能家居集成，走的是立林官方 App
-同款云服务（`iot.leelen.com`）。
+用于 Home Assistant 的立林（Leelen）3.0 智能家居集成，走立林官方 App 同款
+云服务（`iot.leelen.com`），并提供可选的局域网捷径：控制命令和状态推送均可
+绕过云端，直接与立林网关本地通信。
 
-集成 domain：`leelen3` · iot_class：`cloud_push`
+集成 domain：`leelen3` · iot_class：`local_push`
 
 ## 功能
+
+### 局域网控制（基于 TLS 的 iotlan LEEL JSON 协议）
+
+当 Home Assistant 能在局域网内发现或手动指定立林网关时（mDNS
+`_iot-gateway._tcp.local.` 或选项里手填 IP），集成会走与官方 App 同款的
+`iotlan` 协议与网关直接通信：
+
+- `bind` → `random` → HMAC-MD5 派生 AES 密钥 → `login` → 周期性 `heartbeat`
+- 控制命令走 LAN 捷径（`dmgr.ctrlFIIDS` 包在 `transparent` / `DevPayload`
+  / `Payload` 里），不再经过 `iot.leelen.com`
+- 设备状态推送（`dmgr.notifyFIIDS`）通过同一条 TLS 连接实时到达，比云端
+  MQTT 路径更快
+
+云端 REST + MQTT 仍作为兜底：若 LAN 握手失败或网关离线，控制命令会自动回退
+到 `encryptV1CtrlFIIDS`，REST 快照也会持续刷新状态。
 
 ### 空调 — 中央空调（服务类型 8259）
 
@@ -56,19 +72,22 @@
 
 ## 状态同步机制
 
-集成通过三层机制保证设备状态实时：
+集成通过四层机制保证设备状态实时：
 
 1. **REST 快照** — 启动时及拓扑变化后，通过一次批量请求读取所有 FIID 状态。
-2. **MQTT 推送（自动启用，推荐）** — 凭据按官方 App 方式自动从登录信息生
+2. **LAN 推送（自动启用，最快）** — 当 Home Assistant 能在局域网内访问立林
+   网关时，集成与网关建立 TLS 长连接，设备状态变化通过 `dmgr.notifyFIIDS`
+   实时到达，无需走云端。
+3. **MQTT 推送（自动启用，推荐兜底）** — 凭据按官方 App 方式自动从登录信息生
    成，集成会订阅官方 App 同款的 `lliot/fiids_report/{did}/{siid}` 主题，设备上报近实时到达。
-3. **控制确认** — `encryptV1CtrlFIIDS` 只是"排队"下发指令（响应中的
+4. **控制确认** — `encryptV1CtrlFIIDS` 只是"排队"下发指令（响应中的
    `waitNum`/`waitTime` 表示网关尚未执行）。因此发送指令后，集成会等待设备
    上报与指令一致的状态（按云端 `waitTime` 提示，上限 10 秒），并在指令等待
    期间（最长 60 秒）拒收过期的旧状态上报——避免界面回退到"指令前"的状态，
    也就是常被反馈的"状态慢一拍"问题。
 
-REST 轮询兜底：MQTT 未连接时每 30 秒同步一次；MQTT 已连接时每 5 分钟做一次
-后台刷新。
+REST 轮询兜底：当 LAN 和 MQTT 均未就绪时每 30 秒同步一次；任一推送通道就绪
+时每 5 分钟做一次后台刷新。
 
 ## 账号与令牌
 
@@ -111,12 +130,15 @@ REST 轮询兜底：MQTT 未连接时每 30 秒同步一次；MQTT 已连接时�
 
 ### 选项
 
-集成选项中有两个菜单：
+集成选项中有三个菜单：
 
 - **MQTT** — 凭据**自动获取**，与官方 App 完全同款：用户名由账号生成
   （`a5e4x84a:<accountId>`），密码使用当前 accessToken，clientId 由云端
   refreshToken 接口响应下发。无需手动填写。两项都填写时以手动值优先；全部
   留空即保持自动模式。
+- **LAN** — 控制局域网捷径。网关 IP 留空走自动 mDNS 发现
+  （`_iot-gateway._tcp.local.`）；只有当 mDNS 找不到网关时（HA 与网关不同
+  VLAN、mDNS 被过滤等场景）才手填。网关端口固定监听广播端口（默认 `49853`）。
 - **刷新设备** — 重新从云端读取设备拓扑：为新增设备创建实体，移除已在立林
   App 中删除的设备实体，展示增删统计并重载集成。在立林 App 中增删设备后使
   用。
@@ -166,6 +188,14 @@ logger:
 
 - MQTT 凭据自动获取；查看日志中的凭据获取记录，或重启 HA 触发一次令牌刷新。
 - 未配置 MQTT 时依赖 30 秒 REST 轮询；指令状态在设备上报新状态后立即确认。
+
+### LAN 通道未生效 / 控制仍走云端
+
+- 日志里搜 `Leelen LAN 已登录` —— 没出现说明握手失败，往下看
+  `[lan-bind]` / `[lan-random]` / `[lan-login]` 三步哪一步报错。
+- 网关 IP 留空走 mDNS 发现；mDNS 找不到网关时在 **LAN** 选项里手填网关 IP。
+- LAN 失败会自动回退云端 REST，控制不会中断；日志里 `[ctrl] 走云端
+  encryptV1CtrlFIIDS` 即回退路径，`[ctrl] LAN 成功` 是 LAN 接管。
 
 ## 支持
 
