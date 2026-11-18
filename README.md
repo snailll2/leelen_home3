@@ -31,6 +31,15 @@ The cloud REST + MQTT path remains as a fallback: if the LAN handshake fails
 or the gateway is offline, controls transparently fall back to
 `encryptV1CtrlFIIDS`, and the REST snapshot keeps state fresh.
 
+> **LAN security note**: matching the official app, the LAN channel's TLS
+> connection does not verify the gateway certificate, and the session key is
+> derived only from the `groupId` plus a gateway-supplied random. This is
+> official-app behavior on a trusted home network; on an untrusted network
+> (public Wi-Fi, a segment with compromised devices) a local attacker could
+> in theory capture the session and forge control commands. Only enable LAN
+> control on trusted networks, or pin the gateway IP via the options and keep
+> the network segmented.
+
 ### Climate — central air conditioner (service type 8259)
 
 - HVAC modes: off / heat / cool / fan only / dry
