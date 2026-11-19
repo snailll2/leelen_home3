@@ -1,7 +1,7 @@
 {
   "name": "Leelen Home 3.0",
   "content_in_root": false,
-  "filename": "leelen_home",
+  "filename": "leelen_home3",
   "country": ["CN"],
   "homeassistant": "2024.1.0",
   "render_readme": true,
